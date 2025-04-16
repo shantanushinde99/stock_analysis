@@ -1,6 +1,7 @@
-streamlit>=1.16.0
-yfinance
+streamlit
+yfinance==0.2.40
 pandas
 plotly
 google-generativeai
 kaleido
+ta-lib
