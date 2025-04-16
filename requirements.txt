@@ -4,4 +4,4 @@ pandas
 plotly
 google-generativeai
 kaleido
-ta-lib
+ta-lib>=0.4.0
