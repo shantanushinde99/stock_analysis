@@ -22,16 +22,6 @@ genai.configure(api_key=GOOGLE_API_KEY)
 MODEL_NAME = 'gemini-2.0-flash'
 gen_model = genai.GenerativeModel(MODEL_NAME)
 
-# Libraries
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import plotly.graph_objects as go
-import tempfile
-import os
-from datetime import datetime, timedelta
-
-# Set up Streamlit app
 st.set_page_config(layout="wide")
 st.title("Technical Stock Analysis Dashboard")
 st.sidebar.header("Configuration")
@@ -84,6 +74,11 @@ def fetch_stock_data(ticker, start, end, retries=3):
     for attempt in range(retries):
         try:
             data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
+            # Debug: Log raw data
+            st.write(f"Debug: Fetched data for {ticker} (Attempt {attempt+1}) - Empty: {data.empty}, Columns: {list(data.columns if not data.empty else [])}")
+            if not data.empty:
+                st.write(f"Debug: First row for {ticker}: {data.head(1)}")
+            
             # Validate data
             if data.empty:
                 st.warning(f"No data returned for {ticker} on attempt {attempt+1}.")
@@ -94,8 +89,6 @@ def fetch_stock_data(ticker, start, end, retries=3):
             if data['Close'].isna().all():
                 st.warning(f"All 'Close' values are NaN for {ticker} on attempt {attempt+1}.")
                 continue
-            # Debug output
-            st.write(f"Debug: Fetched data for {ticker} - Shape: {data.shape}, First row: {data.head(1)}")
             return data
         except Exception as e:
             st.error(f"Error fetching data for {ticker} on attempt {attempt+1}: {str(e)}")
@@ -128,6 +121,7 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
     def build_chart(ticker, data):
         # Validate data
         if data.empty or 'Close' not in data.columns or data['Close'].isna().all():
+            st.error(f"No valid data for {ticker}: Chart is empty or contains only NaN values.")
             return None
 
         # Create figure
@@ -204,7 +198,6 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
         with st.spinner(f"Generating chart for {ticker}..."):
             fig = build_chart(ticker, data)
             if fig is None:
-                st.error(f"No valid data for {ticker}: Chart is empty or contains only NaN values.")
                 continue
             overall_results.append({"Stock": ticker, "Recommendation": "N/A (Graph Only)"})
             with tabs[i + 1]:
@@ -216,7 +209,7 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
                     st.write("**Recommendation:**")
                     st.write("N/A (Graph Only)")
                     st.write("**Note:**")
-                    st.write("AI analysis disabled due to missing Gemini API key.")
+                    st.write("AI analysis disabled for simplicity.")
 
     # Overall Summary tab
     with tabs[0]:
