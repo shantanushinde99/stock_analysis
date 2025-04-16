@@ -22,9 +22,18 @@ genai.configure(api_key=GOOGLE_API_KEY)
 MODEL_NAME = 'gemini-2.0-flash'
 gen_model = genai.GenerativeModel(MODEL_NAME)
 
+# Libraries
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
+import tempfile
+import os
+from datetime import datetime, timedelta
+
 # Set up Streamlit app
 st.set_page_config(layout="wide")
-st.title("AI-Powered Technical Stock Analysis Dashboard")
+st.title("Technical Stock Analysis Dashboard")
 st.sidebar.header("Configuration")
 
 # Input for multiple stock tickers
@@ -33,7 +42,7 @@ tickers = [ticker.strip().upper() for ticker in tickers_input.split(",") if tick
 
 # Date range
 today = datetime.today()
-end_date_default = today - timedelta(days=1)  # Ensure end date is not in the future
+end_date_default = today - timedelta(days=1)  # Avoid future dates
 start_date_default = end_date_default - timedelta(days=365)
 start_date = st.sidebar.date_input("Start Date", value=start_date_default, max_value=today)
 end_date = st.sidebar.date_input("End Date", value=end_date_default, max_value=today)
@@ -69,17 +78,29 @@ if st.session_state["last_params"] != current_params:
         del st.session_state["stock_data"]
     st.session_state["last_params"] = current_params
 
-# Cache yfinance data
+# Cache yfinance data with retry mechanism
 @st.cache_data
-def fetch_stock_data(ticker, start, end):
-    try:
-        data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
-        if data.empty or data['Close'].isna().all():
-            return None
-        return data
-    except Exception as e:
-        st.error(f"Error fetching data for {ticker}: {str(e)}")
-        return None
+def fetch_stock_data(ticker, start, end, retries=3):
+    for attempt in range(retries):
+        try:
+            data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
+            # Validate data
+            if data.empty:
+                st.warning(f"No data returned for {ticker} on attempt {attempt+1}.")
+                continue
+            if 'Close' not in data.columns:
+                st.warning(f"No 'Close' column in data for {ticker} on attempt {attempt+1}.")
+                continue
+            if data['Close'].isna().all():
+                st.warning(f"All 'Close' values are NaN for {ticker} on attempt {attempt+1}.")
+                continue
+            # Debug output
+            st.write(f"Debug: Fetched data for {ticker} - Shape: {data.shape}, First row: {data.head(1)}")
+            return data
+        except Exception as e:
+            st.error(f"Error fetching data for {ticker} on attempt {attempt+1}: {str(e)}")
+    st.error(f"Failed to fetch valid data for {ticker} after {retries} attempts.")
+    return None
 
 # Button to fetch data
 if st.sidebar.button("Fetch Data"):
@@ -103,11 +124,11 @@ if st.sidebar.button("Fetch Data"):
 # Ensure we have data to analyze
 if "stock_data" in st.session_state and st.session_state["stock_data"]:
 
-    # Function to build chart and analyze
-    def analyze_ticker(ticker, data):
+    # Function to build chart
+    def build_chart(ticker, data):
         # Validate data
-        if data.empty or data['Close'].isna().all():
-            return None, {"action": "Error", "justification": f"No valid data for {ticker}: Chart is empty or contains only NaN values."}
+        if data.empty or 'Close' not in data.columns or data['Close'].isna().all():
+            return None
 
         # Create figure
         fig = go.Figure()
@@ -137,7 +158,7 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
                 sma = data['Close'].rolling(window=sma_period).mean()
                 fig.add_trace(go.Scatter(x=data.index, y=sma, mode='lines', name=f'SMA ({sma_period})'))
             elif indicator == "20-Day EMA":
-                ema = data['Close'].ewm(spans=sma_period).mean()
+                ema = data['Close'].ewm(span=sma_period).mean()
                 fig.add_trace(go.Scatter(x=data.index, y=ema, mode='lines', name=f'EMA ({sma_period})'))
             elif indicator == "20-Day Bollinger Bands":
                 sma = data['Close'].rolling(window=sma_period).mean()
@@ -168,51 +189,7 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
             add_indicator(ind)
 
         fig.update_layout(xaxis_rangeslider_visible=False, height=600)
-
-        # Save chart as PNG
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
-            fig.write_image(tmpfile.name)
-            tmpfile_path = tmpfile.name
-        with open(tmpfile_path, "rb") as f:
-            image_bytes = f.read()
-        os.remove(tmpfile_path)
-
-        # Create image part
-        image_part = {
-            "data": image_bytes,
-            "mime_type": "image/png"
-        }
-
-        # Analysis prompt
-        analysis_prompt = (
-            f"You are a Stock Trader specializing in Technical Analysis at a top financial institution. "
-            f"Analyze the stock chart for {ticker} based on its {chart_type.lower()} chart and the displayed technical indicators: {', '.join(indicators)}. "
-            f"Provide a detailed justification of your analysis, explaining what patterns, signals, and trends you observe. "
-            f"Then, based solely on the chart, provide a recommendation from the following options: "
-            f"'Strong Buy', 'Buy', 'Weak Buy', 'Hold', 'Weak Sell', 'Sell', or 'Strong Sell'. "
-            f"Return your output as a JSON object with two keys: 'action' and 'justification'."
-        )
-
-        # Call Gemini API
-        contents = [
-            {"role": "user", "parts": [analysis_prompt]},
-            {"role": "user", "parts": [image_part]}
-        ]
-
-        try:
-            response = gen_model.generate_content(contents=contents)
-            result_text = response.text
-            json_start_index = result_text.find('{')
-            json_end_index = result_text.rfind('}') + 1
-            if json_start_index != -1 and json_end_index > json_start_index:
-                json_string = result_text[json_start_index:json_end_index]
-                result = json.loads(json_string)
-            else:
-                raise ValueError("No valid JSON object found")
-        except Exception as e:
-            result = {"action": "Error", "justification": f"Analysis failed: {str(e)}"}
-
-        return fig, result
+        return fig
 
     # Create tabs
     tab_names = ["Overall Summary"] + list(st.session_state["stock_data"].keys())
@@ -224,22 +201,22 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
     # Process each ticker
     for i, ticker in enumerate(st.session_state["stock_data"]):
         data = st.session_state["stock_data"][ticker]
-        with st.spinner(f"Analyzing {ticker}..."):
-            fig, result = analyze_ticker(ticker, data)
+        with st.spinner(f"Generating chart for {ticker}..."):
+            fig = build_chart(ticker, data)
             if fig is None:
-                st.error(result["justification"])
+                st.error(f"No valid data for {ticker}: Chart is empty or contains only NaN values.")
                 continue
-            overall_results.append({"Stock": ticker, "Recommendation": result.get("action", "N/A")})
+            overall_results.append({"Stock": ticker, "Recommendation": "N/A (Graph Only)"})
             with tabs[i + 1]:
-                st.subheader(f"Analysis for {ticker}")
+                st.subheader(f"Chart for {ticker}")
                 col1, col2 = st.columns([2, 1])
                 with col1:
                     st.plotly_chart(fig, use_container_width=True)
                 with col2:
                     st.write("**Recommendation:**")
-                    st.write(result.get("action", "N/A"))
-                    st.write("**Justification:**")
-                    st.write(result.get("justification", "No justification provided."))
+                    st.write("N/A (Graph Only)")
+                    st.write("**Note:**")
+                    st.write("AI analysis disabled due to missing Gemini API key.")
 
     # Overall Summary tab
     with tabs[0]:
@@ -256,7 +233,7 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
                 mime="text/csv"
             )
         else:
-            st.warning("No valid analysis results available. Please check data or try different tickers.")
+            st.warning("No valid charts generated. Please check data or try different tickers.")
 
 else:
     st.info("Please fetch stock data using the sidebar.")
