@@ -5,3 +5,4 @@ plotly
 google-generativeai
 kaleido
 ta-lib>=0.4.0
+pip>=25.0.1
