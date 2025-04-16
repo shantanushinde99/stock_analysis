@@ -8,6 +8,12 @@ import tempfile
 import os
 import json
 from datetime import datetime, timedelta
+import streamlit as st_version  # For version checking
+
+# Check Streamlit version for compatibility
+if not hasattr(st, 'rerun'):
+    st.error("This app requires Streamlit version >= 1.10 for st.rerun(). Please upgrade Streamlit using `pip install streamlit --upgrade`.")
+    st.stop()
 
 # Configure the API key - IMPORTANT: Use Streamlit secrets or environment variables for security
 GOOGLE_API_KEY = "AIzaSyDLBVOXnCYMe0tHIQ5JDEn_IRQx58fGbyE"  # REPLACE WITH YOUR ACTUAL API KEY SECURELY
@@ -66,7 +72,7 @@ if st.session_state["last_params"] != current_params:
 # Cache yfinance data
 @st.cache_data
 def fetch_stock_data(ticker, start, end):
-    return yf.download(ticker, start=start, end=end, progress=False)
+    return yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
 
 # Button to fetch data
 if st.sidebar.button("Fetch Data"):
@@ -82,7 +88,7 @@ if st.sidebar.button("Fetch Data"):
             progress_bar.progress((i + 1) / len(tickers))
         st.session_state["stock_data"] = stock_data
         st.success("Stock data loaded successfully for: " + ", ".join(stock_data.keys()))
-        st.experimental_rerun()  # Force rerun to update charts
+        st.rerun()  # Force rerun to update charts
 
 # Ensure we have data to analyze
 if "stock_data" in st.session_state and st.session_state["stock_data"]:
