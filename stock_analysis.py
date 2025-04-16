@@ -8,7 +8,6 @@ import tempfile
 import os
 import json
 from datetime import datetime, timedelta
-import streamlit as st_version  # For version checking
 
 # Check Streamlit version for compatibility
 if not hasattr(st, 'rerun'):
@@ -29,14 +28,15 @@ st.title("AI-Powered Technical Stock Analysis Dashboard")
 st.sidebar.header("Configuration")
 
 # Input for multiple stock tickers
-tickers_input = st.sidebar.text_input("Enter Stock Tickers (comma-separated):", "AAPL,MSFT,GOOG")
+tickers_input = st.sidebar.text_input("Enter Stock Tickers (comma-separated):", "SPY,TSLA,AMZN")
 tickers = [ticker.strip().upper() for ticker in tickers_input.split(",") if ticker.strip()]
 
 # Date range
-end_date_default = datetime.today()
+today = datetime.today()
+end_date_default = today - timedelta(days=1)  # Ensure end date is not in the future
 start_date_default = end_date_default - timedelta(days=365)
-start_date = st.sidebar.date_input("Start Date", value=start_date_default)
-end_date = st.sidebar.date_input("End Date", value=end_date_default)
+start_date = st.sidebar.date_input("Start Date", value=start_date_default, max_value=today)
+end_date = st.sidebar.date_input("End Date", value=end_date_default, max_value=today)
 
 # Technical indicators selection
 st.sidebar.subheader("Technical Indicators")
@@ -72,7 +72,14 @@ if st.session_state["last_params"] != current_params:
 # Cache yfinance data
 @st.cache_data
 def fetch_stock_data(ticker, start, end):
-    return yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
+    try:
+        data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
+        if data.empty or data['Close'].isna().all():
+            return None
+        return data
+    except Exception as e:
+        st.error(f"Error fetching data for {ticker}: {str(e)}")
+        return None
 
 # Button to fetch data
 if st.sidebar.button("Fetch Data"):
@@ -81,20 +88,27 @@ if st.sidebar.button("Fetch Data"):
         progress_bar = st.progress(0)
         for i, ticker in enumerate(tickers):
             data = fetch_stock_data(ticker, start_date, end_date)
-            if not data.empty:
+            if data is not None:
                 stock_data[ticker] = data
             else:
-                st.warning(f"No data found for {ticker}.")
+                st.warning(f"Skipping {ticker}: No valid data available.")
             progress_bar.progress((i + 1) / len(tickers))
-        st.session_state["stock_data"] = stock_data
-        st.success("Stock data loaded successfully for: " + ", ".join(stock_data.keys()))
-        st.rerun()  # Force rerun to update charts
+        if stock_data:
+            st.session_state["stock_data"] = stock_data
+            st.success("Stock data loaded successfully for: " + ", ".join(stock_data.keys()))
+            st.rerun()  # Force rerun to update charts
+        else:
+            st.error("No valid data fetched for any ticker. Please check ticker symbols or date range.")
 
 # Ensure we have data to analyze
 if "stock_data" in st.session_state and st.session_state["stock_data"]:
 
     # Function to build chart and analyze
     def analyze_ticker(ticker, data):
+        # Validate data
+        if data.empty or data['Close'].isna().all():
+            return None, {"action": "Error", "justification": f"No valid data for {ticker}: Chart is empty or contains only NaN values."}
+
         # Create figure
         fig = go.Figure()
 
@@ -123,7 +137,7 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
                 sma = data['Close'].rolling(window=sma_period).mean()
                 fig.add_trace(go.Scatter(x=data.index, y=sma, mode='lines', name=f'SMA ({sma_period})'))
             elif indicator == "20-Day EMA":
-                ema = data['Close'].ewm(span=sma_period).mean()
+                ema = data['Close'].ewm(spans=sma_period).mean()
                 fig.add_trace(go.Scatter(x=data.index, y=ema, mode='lines', name=f'EMA ({sma_period})'))
             elif indicator == "20-Day Bollinger Bands":
                 sma = data['Close'].rolling(window=sma_period).mean()
@@ -212,6 +226,9 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
         data = st.session_state["stock_data"][ticker]
         with st.spinner(f"Analyzing {ticker}..."):
             fig, result = analyze_ticker(ticker, data)
+            if fig is None:
+                st.error(result["justification"])
+                continue
             overall_results.append({"Stock": ticker, "Recommendation": result.get("action", "N/A")})
             with tabs[i + 1]:
                 st.subheader(f"Analysis for {ticker}")
@@ -227,16 +244,19 @@ if "stock_data" in st.session_state and st.session_state["stock_data"]:
     # Overall Summary tab
     with tabs[0]:
         st.subheader("Overall Structured Recommendations")
-        df_summary = pd.DataFrame(overall_results)
-        st.table(df_summary)
-        # Download button
-        csv = df_summary.to_csv(index=False)
-        st.download_button(
-            label="Download Summary as CSV",
-            data=csv,
-            file_name="stock_analysis_summary.csv",
-            mime="text/csv"
-        )
+        if overall_results:
+            df_summary = pd.DataFrame(overall_results)
+            st.table(df_summary)
+            # Download button
+            csv = df_summary.to_csv(index=False)
+            st.download_button(
+                label="Download Summary as CSV",
+                data=csv,
+                file_name="stock_analysis_summary.csv",
+                mime="text/csv"
+            )
+        else:
+            st.warning("No valid analysis results available. Please check data or try different tickers.")
 
 else:
     st.info("Please fetch stock data using the sidebar.")
